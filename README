@@ -1,0 +1,27 @@
+
+
+				 tstat
+
+   Documentation and description of usage, can be found in tstat(1)
+   manual page.
+
+Installation Requirements
+
+   A C-compiler (for example GCC) and Make is needed to build and
+   install tstat.  Only supported platform is OpenBSD.
+
+Installation from Source
+
+   Extract and install tstat:
+
+    # tar xzf tstat-n.n.tar.gz
+    # cd tstat-n.n/
+    # make install
+
+Contributions
+
+   Thanks to the following people for contributing code and hints:
+
+   Stefan Verhaegh
+   Valère Monseur
+   xcko

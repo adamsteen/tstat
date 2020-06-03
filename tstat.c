@@ -250,8 +250,7 @@ static void d_run(const char *ifn) {
     int a = -1, m = -1;
     char s[LINE_MAX];
 
-    if ((a = open("/dev/apm", O_RDONLY)) == -1 ||
-        (m = open("/dev/mixer", O_RDONLY)) == -1)
+    if ((a = open("/dev/apm", O_RDONLY)) == -1)
         err(1, "open failed");
     d_fmt(s, sizeof(s), "%s | %s | %s | %s | %s ",
         d_net(ifn), d_cpu(), d_bat(a), d_temp(), d_time());

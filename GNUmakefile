@@ -1,5 +1,5 @@
-# $Id: Makefile 34 2017-06-21 19:57:22Z umaxx $
-# Copyright (c) 2016-2017 Joerg Jung <mail@umaxx.net>
+# macOS build; GNU make prefers this file, OpenBSD make ignores it
+# Copyright (c) 2019 Adam Steen <adam@adamsteen.com.au>
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -13,34 +13,33 @@
 # ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-CC?=gcc
+CC?=cc
 INSTALL?=install
 RM?=rm -f
 
 PREFIX?=/usr/local
 
 BINDIR?=$(PREFIX)/bin
-INCDIR?=$(PREFIX)/include
-LIBDIR?=$(PREFIX)/lib
-MANDIR?=$(PREFIX)/man
+MANDIR?=$(PREFIX)/share/man
 
 CFLAGS?=-Os
-CFLAGS+=-ansi -pedantic -Wall -Wextra
-CFLAGS+=-Isrc -I/usr/include -I$(INCDIR)
+CFLAGS+=-std=c99 -pedantic -Wall -Wextra
 
-LDFLAGS+=-L/usr/lib -L$(LIBDIR)
+LIBS+=-framework CoreFoundation -framework IOKit
 
-LIBS+=-lutil
-
-OBJECTS=tstat.o tstat_openbsd.o
+OBJECTS=tstat.o tstat_darwin.o
 
 all: tstat
 
-.c.o:
+%.o: %.c tstat.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 tstat: $(OBJECTS)
 	$(CC) $(LDFLAGS) -o tstat $(OBJECTS) $(LIBS)
+
+test: CFLAGS+=-DTSTAT_TEST
+test: clean tstat
+	./tstat en0
 
 clean:
 	$(RM) $(OBJECTS) tstat tstat.core
@@ -52,4 +51,4 @@ install: tstat
 uninstall:
 	$(RM) $(BINDIR)/tstat $(MANDIR)/man1/tstat.1
 
-.PHONY: all clean install uninstall
+.PHONY: all clean install uninstall test

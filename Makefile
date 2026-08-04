@@ -32,7 +32,7 @@ LDFLAGS+=-L/usr/lib -L$(LIBDIR)
 
 LIBS+=-lutil
 
-OBJECTS=tstat.o tstat_openbsd.o
+OBJECTS=tstat.o tstat_state.o tstat_openbsd.o
 
 all: tstat
 

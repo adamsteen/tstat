@@ -27,7 +27,7 @@ CFLAGS+=-std=c99 -pedantic -Wall -Wextra
 
 LIBS+=-framework CoreFoundation -framework IOKit
 
-OBJECTS=tstat.o tstat_darwin.o
+OBJECTS=tstat.o tstat_state.o tstat_darwin.o
 
 all: tstat
 

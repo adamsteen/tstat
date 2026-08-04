@@ -69,12 +69,12 @@ static char *d_wifi(const char *ifn) {
 
 char *d_net(const char *ifn) {
     static char s[D_BUF];
-    /* ponytail: one-shot process zeroes these, so rate reads 0B/s; needs a state file */
-    static uint64_t in, out;
+    struct d_state st;
     struct ifaddrs *ifas, *ifa;
     struct if_data *ifd;
     uint64_t ib = 0, ob = 0;
-    char is[FMT_SCALED_STRSIZE], os[FMT_SCALED_STRSIZE], f = 0, *w;
+    double el;
+    char is[FMT_SCALED_STRSIZE], os[FMT_SCALED_STRSIZE], f = 0, p, *w;
 
     if (getifaddrs(&ifas) == -1)
         return d_warn("getifaddrs failed");
@@ -85,10 +85,13 @@ char *d_net(const char *ifn) {
     freeifaddrs(ifas);
     if (!f)
         return "interface failed";
-    if (fmt_scaled(in ? ib - in : 0, is) == -1 ||
-        fmt_scaled(out ? ob - out : 0, os) == -1)
+    /* counters here are 64-bit; a decrease means the interface was reset */
+    p = !d_state_load(ifn, &st) && (el = d_now() - st.t) > 0 &&
+        ib >= st.in && ob >= st.out;
+    if (fmt_scaled(p ? (ib - st.in) / el : 0, is) == -1 ||
+        fmt_scaled(p ? (ob - st.out) / el : 0, os) == -1)
         return d_warn("fmt_scaled failed");
-    return (in = ib, out = ob, w = d_wifi(ifn), strlen(w) ?
+    return (d_state_net(ib, ob), w = d_wifi(ifn), strlen(w) ?
         d_fmt(s, sizeof(s), "↑ %s/s ↓ %s/s %s", os, is, w) :
         d_fmt(s, sizeof(s), "↑ %s/s ↓ %s/s", os, is));
 }
@@ -106,21 +109,27 @@ static char *d_perf(void) {
     return d_fmt(s, sizeof(s), "%0.1fGHz [%d%%]", frq / (double)1000, p);
 }
 
-char *d_cpu(void) {
+char *d_cpu(const char *ifn) {
     static char s[D_BUF];
-    /* ponytail: same one-shot delta ceiling as d_net */
-    static long cpu[CPUSTATES];
+    struct d_state st;
     int mib[2] = { CTL_KERN, KERN_CPTIME }, p;
     long c[CPUSTATES];
+    uint64_t tb, ti, busy, idle;
     size_t sz = sizeof(c);
 
     if (sysctl(mib, 2, &c, &sz, NULL, 0) == -1)
         return d_warn("sysctl failed");
-    p = (c[CP_USER] - cpu[CP_USER] + c[CP_SYS] - cpu[CP_SYS] +
-         c[CP_NICE] - cpu[CP_NICE]) / (double)
-        (c[CP_USER] - cpu[CP_USER] + c[CP_SYS] - cpu[CP_SYS] +
-         c[CP_NICE] - cpu[CP_NICE] + c[CP_IDLE] - cpu[CP_IDLE]) * 100;
-    memmove(cpu, c, sizeof(cpu));
+    /* CP_INTR is excluded from both sums, as it always has been */
+    tb = (uint64_t)c[CP_USER] + c[CP_SYS] + c[CP_NICE];
+    ti = (uint64_t)c[CP_IDLE];
+    d_state_cpu(tb, ti);
+    /* cold start falls back to the since-boot average */
+    busy = tb, idle = ti;
+    if (!d_state_load(ifn, &st) && tb >= st.busy && ti >= st.idle)
+        busy = tb - st.busy, idle = ti - st.idle;
+    if (!(busy + idle))
+        return "cpu failed";
+    p = busy / (double)(busy + idle) * 100;
     return d_fmt(s, sizeof(s), "CPU %d%% %s", p, d_perf());
 }
 

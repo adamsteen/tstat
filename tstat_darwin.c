@@ -44,12 +44,12 @@ static char *d_scaled(uint64_t b, char *buf, size_t sz) {
 
 char *d_net(const char *ifn) {
     static char s[D_BUF];
-    /* ponytail: one-shot process zeroes these, so rate reads 0B/s; needs a state file */
-    static uint64_t in, out;
+    struct d_state st;
     struct ifaddrs *ifas, *ifa;
     struct if_data *ifd;
     uint64_t ib = 0, ob = 0;
-    char is[D_SCALED_SZ], os[D_SCALED_SZ], f = 0;
+    double el;
+    char is[D_SCALED_SZ], os[D_SCALED_SZ], f = 0, p;
 
     if (getifaddrs(&ifas) == -1)
         return d_warn("getifaddrs failed");
@@ -67,30 +67,33 @@ char *d_net(const char *ifn) {
     freeifaddrs(ifas);
     if (!f)
         return "interface failed";
+    p = !d_state_load(ifn, &st) && (el = d_now() - st.t) > 0;
     /* counters are u_int32_t and wrap at 4GB; mask the delta back into range */
-    d_scaled(in ? (ib - in) & 0xffffffff : 0, is, sizeof(is));
-    d_scaled(out ? (ob - out) & 0xffffffff : 0, os, sizeof(os));
-    return (in = ib, out = ob,
+    d_scaled(p ? ((ib - st.in) & 0xffffffff) / el : 0, is, sizeof(is));
+    d_scaled(p ? ((ob - st.out) & 0xffffffff) / el : 0, os, sizeof(os));
+    return (d_state_net(ib, ob),
         d_fmt(s, sizeof(s), "↑ %s/s ↓ %s/s", os, is));
 }
 
-char *d_cpu(void) {
+char *d_cpu(const char *ifn) {
     static char s[D_BUF];
-    /* ponytail: same one-shot delta ceiling as d_net */
-    static natural_t cpu[CPU_STATE_MAX];
+    struct d_state st;
     host_cpu_load_info_data_t d;
     mach_msg_type_number_t cnt = HOST_CPU_LOAD_INFO_COUNT;
-    natural_t busy, idle;
+    uint64_t tb, ti, busy, idle;
     int p;
 
     if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
         (host_info_t)&d, &cnt) != KERN_SUCCESS)
         return d_warn("host_statistics failed");
-    busy = (d.cpu_ticks[CPU_STATE_USER] - cpu[CPU_STATE_USER]) +
-           (d.cpu_ticks[CPU_STATE_SYSTEM] - cpu[CPU_STATE_SYSTEM]) +
-           (d.cpu_ticks[CPU_STATE_NICE] - cpu[CPU_STATE_NICE]);
-    idle = d.cpu_ticks[CPU_STATE_IDLE] - cpu[CPU_STATE_IDLE];
-    memmove(cpu, d.cpu_ticks, sizeof(cpu));
+    tb = (uint64_t)d.cpu_ticks[CPU_STATE_USER] +
+         d.cpu_ticks[CPU_STATE_SYSTEM] + d.cpu_ticks[CPU_STATE_NICE];
+    ti = d.cpu_ticks[CPU_STATE_IDLE];
+    d_state_cpu(tb, ti);
+    /* cold start falls back to the since-boot average */
+    busy = tb, idle = ti;
+    if (!d_state_load(ifn, &st) && tb >= st.busy && ti >= st.idle)
+        busy = tb - st.busy, idle = ti - st.idle;
     if (!(busy + idle))
         return "cpu failed";
     p = busy / (double)(busy + idle) * 100;

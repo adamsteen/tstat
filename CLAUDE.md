@@ -62,8 +62,13 @@ Three source files plus a header:
 - `tstat.h` — the collector contract: `d_net(ifn)`, `d_cpu()`, `d_bat()`,
   `d_time()`, plus `d_temp()` guarded under `#ifdef __OpenBSD__` so the mac
   build cannot reference it. Also `D_BUF`.
+- `tstat_state.c` — the cross-invocation sample: `d_now`, `d_state_load`,
+  `d_state_save`, and the `d_state_net`/`d_state_cpu` setters. Platform-neutral.
 - `tstat_openbsd.c` — `d_net`, `d_wifi`, `d_perf`, `d_cpu`, `d_bat`, `d_temp`.
 - `tstat_darwin.c` — `d_net`, `d_cpu`, `d_bat`, and `d_scaled`.
+
+`d_cpu` takes an `ifn` argument it never reads as a CPU input — it only selects
+the state file, keeping one file per interface.
 
 `main` → `d_run(ifn)` → one `d_fmt` call joining the collectors with `" | "`:
 
@@ -76,15 +81,29 @@ Key structural facts, most following from the fork's one-shot design:
   drove dwm via X11. This fork prints once and exits — tmux re-invokes it on its
   own `status-interval`. The man page (`tstat.1`) is still the inherited `dstat`
   page and describes the old looping/dwm/X11 behaviour; it is stale.
-- **Two of the fields carry no live data, on both platforms.** `d_net` and
-  `d_cpu` compute deltas against `static` locals that were meant to persist
-  across loop iterations. A one-shot process leaves them zeroed, so **throughput
-  always prints `0B/s`** and **CPU prints the since-boot average, not current
-  load** (verified: reads a flat 8% while three `yes` processes spin). Same dead
-  latch for `static char w` in OpenBSD's `d_bat`. Marked with `ponytail:`
-  comments at each site. Fixing this needs counters persisted across invocations
-  — a state file; the statics cannot do it. Do not "fix" it by tweaking the
-  arithmetic.
+- **`d_net` and `d_cpu` measure against a state file, not a static.** The
+  one-shot design means a `static` baseline is always zero at process start,
+  which is why those two fields used to print `0B/s` and a since-boot CPU
+  average. `tstat_state.c` persists the previous sample to
+  `$TMPDIR/tmp-tstat-<uid>-<ifn>.state` (falling back to `/tmp/`), and both
+  collectors delta against it. Key invariants:
+  - **Rates divide by measured elapsed time** (`d_now()`, `CLOCK_MONOTONIC`),
+    never by an assumed 1-second tick, so any `status-interval` is correct.
+    Monotonic, not wall clock — an NTP step or DST shift would otherwise produce
+    absurd or negative rates.
+  - **Writes go through `mkstemp` + `rename`**, which replaces the target
+    atomically without ever opening it. Reads use `O_NOFOLLOW` and require a
+    regular file owned by the caller. Those guard opposite directions; don't add
+    `O_NOFOLLOW` to the save path, it has nothing to act on there.
+  - **A sample is discarded** if older than 60s (`D_STALE`), if `magic` doesn't
+    match (bump `TST1` whenever `struct d_state` changes), or if a counter went
+    backwards. Any of those falls back to the old cold-start output — `0B/s` and
+    the boot average — which is intentional, not a bug.
+  - **No locking.** Concurrent invocations may interleave; the atomic rename
+    means the loser's sample is replaced and the next tick recovers.
+- **`static char w`** in OpenBSD's `d_bat` is a dead low-battery latch with the
+  same broken cross-invocation premise. Nothing reads it — upstream used it to
+  raise an X11 warning window this fork dropped. Left in place deliberately.
 - **macOS byte counters are 32-bit.** `getifaddrs` hands back `struct if_data`
   (not `if_data64`), whose `ifi_ibytes`/`ifi_obytes` are `u_int32_t` and wrap at
   4GB — `netstat -ibn` reconstructs the high bits, the struct does not. The delta
@@ -92,8 +111,7 @@ Key structural facts, most following from the fork's one-shot design:
   returns the same truncated value, so it is not a workaround.
 - **macOS `d_net` must filter on `AF_LINK`.** An interface has several `ifaddrs`
   entries and only the link-layer one carries `if_data`. Without the filter the
-  counters read zero — and the formatted output would hide it, since the field
-  prints `0B/s` regardless. Check the raw values with `make test`.
+  counters read zero. Check the raw values with `make test`.
 - **Every collector returns a `char *` that is never freed** — either a
   `static char s[D_BUF]` inside the function or a string literal error message.
   Callers must not hold two results from the same collector at once. `d_fmt`
@@ -135,6 +153,22 @@ make test                   # d_scaled asserts + raw counter print
 
 Cross-check against the system: `pmset -g batt` for battery, `top -l1 -n0` for
 CPU, `netstat -ibn -I en0` for the raw counters.
+
+The rate fields need a *second* run to show anything — the first primes the state
+file. To re-test a cold start, `rm "$TMPDIR"tmp-tstat-*.state` first.
+
+Worthwhile checks on the state file, all of which have caught something:
+
+- **CPU tracks load** — idle vs. `yes >/dev/null` on half the cores; should land
+  near `50% + idle baseline`, not pinned at the boot average.
+- **Rate divides by elapsed, not per tick** — serve a known-size file over
+  loopback and compare the reported rate against `bytes / seconds` worked out by
+  hand. A hardcoded divisor shows up as an exact multiple of the gap. Note that
+  shell arithmetic on `netstat` counters overflows (they are 32-bit and wrap), so
+  compute the expectation from the file size, not from a counter difference.
+- **No `mkstemp` litter** — after a few hundred runs, exactly one `.state` file.
+- **Symlink refused** — point the state path at a symlink and confirm the target
+  is not created.
 
 For a tmux end-to-end check, use a **private server** so a mistake cannot touch
 the user's live session — `tmux -L probe -f /dev/null`, and `kill-server` on that

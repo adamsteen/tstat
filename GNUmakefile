@@ -45,6 +45,7 @@ clean:
 	$(RM) $(OBJECTS) tstat tstat.core
 
 install: tstat
+	$(INSTALL) -d $(BINDIR) $(MANDIR)/man1
 	$(INSTALL) -m0755 tstat $(BINDIR)
 	$(INSTALL) -m0444 tstat.1 $(MANDIR)/man1
 

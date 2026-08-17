@@ -48,6 +48,8 @@ char *d_time(void);
 
 #ifdef __OpenBSD__
 char *d_temp(void);
+#else
+char *d_mem(void); /* no memory compressor on OpenBSD, so macOS-only */
 #endif
 
 #endif

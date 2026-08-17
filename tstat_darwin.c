@@ -21,6 +21,7 @@
 #include <net/if_dl.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
+#include <sys/sysctl.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/ps/IOPowerSources.h>
 #include <IOKit/ps/IOPSKeys.h>
@@ -129,6 +130,34 @@ char *d_bat(void) {
     if (mins <= 0)
         return d_fmt(s, sizeof(s), "⚡ %d%% [--:--]", cap);
     return d_fmt(s, sizeof(s), "⚡ %d%% [%u:%02u]", cap, mins / 60, mins % 60);
+}
+
+char *d_mem(void) {
+    static char s[D_BUF];
+    vm_statistics64_data_t v;
+    mach_msg_type_number_t cnt = HOST_VM_INFO64_COUNT;
+    struct xsw_usage sw;
+    vm_size_t pg;
+    uint64_t total = 0;
+    size_t sz = sizeof(total);
+    char ss[D_SCALED_SZ];
+    int p;
+
+    if (host_page_size(mach_host_self(), &pg) != KERN_SUCCESS)
+        return d_warn("host_page_size failed");
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
+        (host_info64_t)&v, &cnt) != KERN_SUCCESS)
+        return d_warn("host_statistics64 failed");
+    if (sysctlbyname("hw.memsize", &total, &sz, NULL, 0) == -1 || !total)
+        return d_warn("sysctlbyname failed");
+    /* pressure, not used/total: free sits near zero by design on macOS, so
+     * used/total always reads alarmingly high even when the system is fine */
+    p = (v.wire_count + v.compressor_page_count) * (double)pg / total * 100;
+    sz = sizeof(sw);
+    if (sysctlbyname("vm.swapusage", &sw, &sz, NULL, 0) == -1)
+        return d_warn("sysctlbyname failed");
+    d_scaled(sw.xsu_used, ss, sizeof(ss));
+    return d_fmt(s, sizeof(s), "MEM %d%% swap %s", p, ss);
 }
 
 #ifdef TSTAT_TEST

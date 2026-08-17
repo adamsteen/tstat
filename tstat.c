@@ -66,8 +66,8 @@ static void d_run(const char *ifn) {
         d_net(ifn), d_cpu(ifn), d_bat(), d_temp(), d_time());
 #else
     /* no unprivileged source for cpu freq, temperature or wifi rssi on macOS */
-    d_fmt(s, sizeof(s), "%s | %s | %s | %s ",
-        d_net(ifn), d_cpu(ifn), d_bat(), d_time());
+    d_fmt(s, sizeof(s), "%s | %s | %s | %s | %s ",
+        d_net(ifn), d_cpu(ifn), d_mem(), d_bat(), d_time());
 #endif
     /* one write per run, after both collectors have recorded their readings */
     d_state_save(ifn);

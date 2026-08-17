@@ -17,8 +17,10 @@ from `-lutil`, none of which exist on macOS.
 Not an oversight, and not worth reopening: `HW_CPUSPEED`/`HW_SETPERF` do not
 exist on Apple Silicon, SMC temperature needs root (`powermetrics`), and RSSI
 would mean linking CoreWLAN and pulling Objective-C into an ANSI C file. macOS
-prints `net | CPU | battery | time`; OpenBSD prints those plus temperature, and
-its net field carries a wifi signal graph.
+prints `net | CPU | MEM | battery | time`; OpenBSD prints `net | CPU | battery
+| temp | time`, with a wifi signal graph riding in the net field. Memory is
+macOS-only for the same class of reason: OpenBSD has no memory compressor, so
+the same formula wouldn't mean the same thing there.
 
 ## Build
 
@@ -60,20 +62,22 @@ Three source files plus a header:
   Platform-neutral; the only `#ifdef __OpenBSD__` is `d_run`'s format string,
   which picks the five-field or four-field line.
 - `tstat.h` — the collector contract: `d_net(ifn)`, `d_cpu()`, `d_bat()`,
-  `d_time()`, plus `d_temp()` guarded under `#ifdef __OpenBSD__` so the mac
-  build cannot reference it. Also `D_BUF`.
+  `d_time()`, plus `d_temp()` guarded under `#ifdef __OpenBSD__` and `d_mem()`
+  in the `#else` branch, so each build can only reference its own collector.
+  Also `D_BUF`.
 - `tstat_state.c` — the cross-invocation sample: `d_now`, `d_state_load`,
   `d_state_save`, and the `d_state_net`/`d_state_cpu` setters. Platform-neutral.
 - `tstat_openbsd.c` — `d_net`, `d_wifi`, `d_perf`, `d_cpu`, `d_bat`, `d_temp`.
-- `tstat_darwin.c` — `d_net`, `d_cpu`, `d_bat`, and `d_scaled`.
+- `tstat_darwin.c` — `d_net`, `d_cpu`, `d_bat`, `d_mem`, and `d_scaled`.
 
 `d_cpu` takes an `ifn` argument it never reads as a CPU input — it only selects
-the state file, keeping one file per interface.
+the state file, keeping one file per interface. `d_mem` takes no argument: it is
+an instantaneous gauge, not a rate, so it has no state to persist.
 
 `main` → `d_run(ifn)` → one `d_fmt` call joining the collectors with `" | "`:
 
-    OpenBSD: d_net(ifn) | d_cpu() | d_bat() | d_temp() | d_time()
-    macOS:   d_net(ifn) | d_cpu() | d_bat() |             d_time()
+    OpenBSD: d_net(ifn) | d_cpu(ifn) | d_bat() | d_temp() | d_time()
+    macOS:   d_net(ifn) | d_cpu(ifn) | d_mem() | d_bat()  | d_time()
 
 Key structural facts, most following from the fork's one-shot design:
 
@@ -121,6 +125,21 @@ Key structural facts, most following from the fork's one-shot design:
   line and the other fields still print. It must call `warn("%s", s)` — a bare
   `warn(s)` trips `-Wformat-security` under `-Wall`. The only hard `err(1, ...)`
   paths are in `main`.
+- **`d_mem` reports pressure, not used/total.** macOS deliberately drives free
+  memory toward zero — unclaimed RAM gets filled with evictable file cache — so
+  a used/total figure sits near 100% on a perfectly healthy machine. That is the
+  exact confusion the field exists to avoid reproducing. Pressure is
+  `(wire_count + compressor_page_count) * pagesize / total`, cross-checked
+  against `memory_pressure(1)`'s free percentage. Swap (`vm.swapusage`'s
+  `xsu_used`) rides alongside it, since compression is cheap and happens well
+  before swap, which is the number that actually costs SSD-latency page-ins.
+  Page size must come from `host_page_size` — this machine reports 16384, not
+  the usual 4096, so hardcoding it silently wrecks the percentage.
+- **Worst-case width is over budget.** `↑ 999K/s ↓ 999K/s | CPU 100% | MEM 100%
+  swap 99G | ⚡ 100% [23:59] | <date>` is 84 display characters; the dotfiles
+  `status-right-length` is 82. Not fixed — no truncation policy was chosen.
+  Typical output is comfortably under (measured 79 chars), so this only bites on
+  a bad day: low battery with hours left, high swap, high CPU, all at once.
 - **Audio/volume is gone, not disabled.** Commit `e6cb1e7` ("make things work
   after audio changes") commented out `d_vol()`; the macOS port dropped the
   commented block and the orphaned mixer fd (`int m = -1` / `close(m)`) along
@@ -152,7 +171,8 @@ make test                   # d_scaled asserts + raw counter print
 ```
 
 Cross-check against the system: `pmset -g batt` for battery, `top -l1 -n0` for
-CPU, `netstat -ibn -I en0` for the raw counters.
+CPU, `netstat -ibn -I en0` for the raw counters, `memory_pressure` for pressure,
+`sysctl -n vm.swapusage` for swap.
 
 The rate fields need a *second* run to show anything — the first primes the state
 file. To re-test a cold start, `rm "$TMPDIR"tmp-tstat-*.state` first.
